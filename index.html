@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raycast Random Maze</title>
+<style>
+html,body{margin:0;height:100%;background:#090909;color:#eee;font-family:Arial,sans-serif;overflow:hidden}
+body{display:flex;flex-direction:column;align-items:center}
+#top{height:52px;display:flex;align-items:center;gap:16px;font-size:14px;flex-wrap:wrap;justify-content:center}
+canvas{display:block;width:min(96vw,1100px);height:auto;image-rendering:pixelated;background:#111}
+kbd{background:#292929;border:1px solid #666;border-radius:4px;padding:2px 6px}
+#msg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.65);font-size:30px;font-weight:bold}
+</style>
+</head>
+<body>
+<div id="top">
+<b>RAYCAST RANDOM MAZE</b>
+<span>↑/↓ Move</span>
+<span>←/→ Look</span>
+<span>Alt+←/→ Strafe</span>
+<span><kbd>R</kbd> New Maze</span>
+</div>
+<canvas id="game" width="960" height="540"></canvas>
+<div id="msg">EXIT REACHED — press R for a new maze</div>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+const W=canvas.width,H=canvas.height;
+const COLS=31,ROWS=31;
+let map,player,exitCell,won=false;
+
+function makeMaze(){
+  won=false;
+  document.getElementById("msg").style.display="none";
+  map=Array.from({length:ROWS},()=>Array(COLS).fill(1));
+  const stack=[[1,1]];
+  map[1][1]=0;
+  const dirs=[[2,0],[-2,0],[0,2],[0,-2]];
+
+  while(stack.length){
+    const [x,y]=stack[stack.length-1];
+    let choices=[];
+    for(const [dx,dy] of dirs){
+      const nx=x+dx,ny=y+dy;
+      if(nx>0&&nx<COLS-1&&ny>0&&ny<ROWS-1&&map[ny][nx]===1)
+        choices.push([nx,ny,dx,dy]);
+    }
+    if(!choices.length){stack.pop();continue;}
+    const [nx,ny,dx,dy]=choices[Math.floor(Math.random()*choices.length)];
+    map[y+dy/2][x+dx/2]=0;
+    map[ny][nx]=0;
+    stack.push([nx,ny]);
+  }
+
+  // Choose the open cell with the greatest Manhattan distance.
+  let ex=1,ey=1,best=-1;
+  for(let y=1;y<ROWS-1;y++)for(let x=1;x<COLS-1;x++){
+    if(map[y][x]===0){
+      const d=Math.abs(x-1)+Math.abs(y-1);
+      if(d>best){best=d;ex=x;ey=y;}
+    }
+  }
+  exitCell={x:ex,y:ey};
+  player={x:1.5,y:1.5,angle:0};
+}
+
+function wall(x,y){
+  const mx=Math.floor(x),my=Math.floor(y);
+  if(mx<0||my<0||mx>=COLS||my>=ROWS)return true;
+  return map[my][mx]===1;
+}
+
+function tryMove(dx,dy){
+  const r=.20;
+  const nx=player.x+dx,ny=player.y+dy;
+  // Separate-axis collision makes movement smooth around corners.
+  if(!wall(nx+r*Math.sign(dx),player.y))player.x=nx;
+  if(!wall(player.x,ny+r*Math.sign(dy)))player.y=ny;
+
+  if(Math.floor(player.x)===exitCell.x&&Math.floor(player.y)===exitCell.y){
+    won=true;
+    document.getElementById("msg").style.display="flex";
+  }
+}
+
+function castRay(angle){
+  const sin=Math.sin(angle),cos=Math.cos(angle);
+  let mapX=Math.floor(player.x),mapY=Math.floor(player.y);
+
+  const deltaX=Math.abs(1/cos);
+  const deltaY=Math.abs(1/sin);
+  let stepX,stepY,sideX,sideY;
+
+  if(cos<0){stepX=-1;sideX=(player.x-mapX)*deltaX}
+  else{stepX=1;sideX=(mapX+1-player.x)*deltaX}
+  if(sin<0){stepY=-1;sideY=(player.y-mapY)*deltaY}
+  else{stepY=1;sideY=(mapY+1-player.y)*deltaY}
+
+  let side=0;
+  for(let i=0;i<100;i++){
+    if(sideX<sideY){sideX+=deltaX*1;mapX+=stepX;side=0}
+    else{sideY+=deltaY*1;mapY+=stepY;side=1}
+    if(mapX<0||mapY<0||mapX>=COLS||mapY>=ROWS)break;
+    if(map[mapY][mapX]===1){
+      const dist=side===0?sideX-deltaX:sideY-deltaY;
+      return {dist:Math.max(.001,dist),side};
+    }
+  }
+  return {dist:50,side:0};
+}
+
+function render(){
+  // Sky and floor
+  ctx.fillStyle="#171b25";
+  ctx.fillRect(0,0,W,H/2);
+  ctx.fillStyle="#242424";
+  ctx.fillRect(0,H/2,W,H/2);
+
+  const fov=Math.PI/3;
+  for(let x=0;x<W;x++){
+    const rayAngle=player.angle-fov/2+(x/W)*fov;
+    const hit=castRay(rayAngle);
+    // Correct fisheye distortion
+    const dist=hit.dist*Math.cos(rayAngle-player.angle);
+    const wallH=Math.min(H*2,H/(dist*.72));
+    const top=(H-wallH)/2;
+
+    // Simple distance shading
+    let shade=Math.max(35,210-dist*24);
+    if(hit.side)shade*=.78;
+    shade=Math.floor(shade);
+    ctx.fillStyle=`rgb(${shade},${shade},${Math.min(255,shade+8)})`;
+    ctx.fillRect(x,top,1,wallH);
+  }
+
+  // Tiny crosshair
+  ctx.strokeStyle="rgba(255,255,255,.7)";
+  ctx.beginPath();
+  ctx.moveTo(W/2-7,H/2);ctx.lineTo(W/2+7,H/2);
+  ctx.moveTo(W/2,H/2-7);ctx.lineTo(W/2,H/2+7);
+  ctx.stroke();
+
+  // Exit indicator: shows a small marker only if the exit is roughly in front.
+  const ex=exitCell.x+.5-player.x,ey=exitCell.y+.5-player.y;
+  let a=Math.atan2(ey,ex)-player.angle;
+  while(a>Math.PI)a-=2*Math.PI;
+  while(a<-Math.PI)a+=2*Math.PI;
+  if(Math.abs(a)<fov/2){
+    const sx=W/2+(a/(fov/2))*(W/2)*.8;
+    ctx.fillStyle="#35e86a";
+    ctx.beginPath();
+    ctx.arc(sx,35,7,0,Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle="#fff";
+    ctx.font="bold 12px Arial";
+    ctx.textAlign="center";
+    ctx.fillText("EXIT",sx,57);
+  }
+
+  requestAnimationFrame(render);
+}
+
+const keys={};
+document.addEventListener("keydown",e=>{
+  const k=e.key.toLowerCase();
+
+  if(k==="r"){
+    makeMaze();
+    e.preventDefault();
+    return;
+  }
+
+  if(["arrowup","arrowdown","arrowleft","arrowright"].includes(k)){
+    keys[k]=true;
+    e.preventDefault();
+  }
+});
+document.addEventListener("keyup",e=>{
+  const k=e.key.toLowerCase();
+  keys[k]=false;
+});
+
+let last=performance.now();
+function update(now){
+  const dt=Math.min(.05,(now-last)/1000);
+  last=now;
+
+  if(!won){
+    const speed=3.0*dt;
+    const turn=2.5*dt;
+
+    // Alt + left/right = strafing
+    // Browser key state doesn't expose Alt reliably through the map,
+    // so track the physical Alt key separately.
+    if(altDown && keys.arrowleft){
+      tryMove(-Math.cos(player.angle)*speed,Math.sin(player.angle)*speed);
+    }else if(altDown && keys.arrowright){
+      tryMove(Math.cos(player.angle)*speed,-Math.sin(player.angle)*speed);
+    }else{
+      if(keys.arrowup)tryMove(Math.cos(player.angle)*speed,Math.sin(player.angle)*speed);
+      if(keys.arrowdown)tryMove(-Math.cos(player.angle)*speed,-Math.sin(player.angle)*speed);
+      if(keys.arrowleft)player.angle-=turn;
+      if(keys.arrowright)player.angle+=turn;
+    }
+  }
+  requestAnimationFrame(update);
+}
+
+let altDown=false;
+document.addEventListener("keydown",e=>{
+  if(e.key==="Alt"){altDown=true;e.preventDefault();}
+});
+document.addEventListener("keyup",e=>{
+  if(e.key==="Alt")altDown=false;
+});
+
+makeMaze();
+requestAnimationFrame(render);
+requestAnimationFrame(update);
+</script>
+</body>
+</html>
